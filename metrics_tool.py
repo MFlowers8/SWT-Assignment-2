@@ -3,6 +3,7 @@ from collections import defaultdict
 
 filename = input("Enter the filename: ")
 
+# Gets the code from the file and parses it
 try:
     with open(filename, "r") as file:
         tree = ast.parse(file.read())
@@ -13,16 +14,18 @@ except SyntaxError:
 # else:
 #     print(f"File '{filename}' is valid.")
 
+
+
+
 class weightedMethodsAnalyzer (ast.NodeVisitor):
-    def visit_ClassDef(self, node):
-        # Filter the class body for function definitions
+    def visit_ClassDef(self, node): # Visits Each Class
         # This counts standard methods, classmethods, staticmethods, and __init__
         counter = 0
-        for n in node.body:
-            if isinstance(n, ast.FunctionDef):
+        for n in node.body: # For each method in the class
+            if isinstance(n, ast.FunctionDef): # Check to make sure it is a function
                 counter += 1
         
-        print(f"Class '{node.name}' WMC = {counter}")
+        print(f"Class '{node.name}' WMC = {counter}") 
             
         # Continue traversing the tree in case there are nested classes
         self.generic_visit(node)
@@ -38,8 +41,8 @@ class ClassCohesionAnalyzer:
         class_nodes = [n for n in ast.walk(self.tree) if isinstance(n, ast.ClassDef)]
         
         results = {}
-        for class_node in class_nodes:
-            results[class_node.name] = self._calculate_lcom4(class_node)
+        for class_node in class_nodes: # For each class in the class_nodes list
+            results[class_node.name] = self._calculate_lcom4(class_node) # Calculate LCOM4 for the class
             
         return results
 
@@ -57,10 +60,11 @@ class ClassCohesionAnalyzer:
         method_vars = defaultdict(set)
         method_calls = defaultdict(set)
         
-        for node in class_node.body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name != '__init__':
+        for node in class_node.body: # for each function in the class
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name != '__init__': # check to make sure it is a function and it isn't __init__
                 # Find instance variables (self.attribute)
-                for sub_node in ast.walk(node):
+                for sub_node in ast.walk(node): # For each function go through the function
+                    # looks for Instant variables self.something
                     if isinstance(sub_node, ast.Attribute) and isinstance(sub_node.value, ast.Name) and sub_node.value.id == 'self':
                         method_vars[node.name].add(sub_node.attr)
                     
@@ -70,18 +74,18 @@ class ClassCohesionAnalyzer:
                             if sub_node.func.attr in methods:
                                 method_calls[node.name].add(sub_node.func.attr)
 
-        # 3. Build an adjacency list (Graph) connecting methods that share states or call each other
+        # 3. Build an adjacency list (Graph) a dictionary where each method points to its connected methods
         graph = defaultdict(set)
         for m in methods:
             graph[m] = set()
 
         for i in range(len(methods)):
-            for j in range(i + 1, len(methods)):
+            for j in range(i + 1, len(methods)): # compares every pair of methods
                 m1, m2 = methods[i], methods[j]
                 
-                # Check shared variables
+                # Check if they have shared variables
                 shared_vars = method_vars[m1].intersection(method_vars[m2])
-                # Check direct calls
+                # Check if one calls the other
                 is_called = m2 in method_calls[m1] or m1 in method_calls[m2]
                 
                 if shared_vars or is_called:
@@ -154,7 +158,7 @@ class ClassCouplingAnalyzer(ast.NodeVisitor):
 
 
 class RFCCalculator(ast.NodeVisitor):
-    def __init__(self):
+    def __init__(self, all_classes: set | None = None):
         # Maps ClassName -> Set of defined methods (M)
         self.defined_methods = defaultdict(set)
         # Maps ClassName -> Set of external methods called (R)
@@ -162,7 +166,8 @@ class RFCCalculator(ast.NodeVisitor):
         
         self.current_class = None
         self.current_method = None
-        self.all_classes = set()
+        # Use classes from analyzer if passed, or collect during traversal
+        self.all_classes = all_classes if all_classes is not None else set()
 
     def visit_ClassDef(self, node):
         old_class = self.current_class
@@ -192,20 +197,15 @@ class RFCCalculator(ast.NodeVisitor):
         if self.current_class and self.current_method:
             func = node.func
             
-            # Case 1: Standard object calls like: obj.method()
+            # Case 1: Method calls on objects: obj.method() or self.method()
             if isinstance(func, ast.Attribute):
-                # If it's calling another method on self (self.other_method())
-                if isinstance(func.value, ast.Name) and func.value.id == 'self':
-                    # We only log it as an external dependency if it wasn't defined locally
-                    # (Though LCOM tracks internal calls, RFC definition focuses on outward reach)
-                    self.called_methods[self.current_class].add(func.attr)
-                else:
-                    # External method invocation
-                    self.called_methods[self.current_class].add(func.attr)
+                self.called_methods[self.current_class].add(func.attr)
                     
-            # Case 2: Global/Direct function calls like: print(), len(), or local_func()
+            # Case 2: Direct name calls (e.g. Prescription(), Patient())
+            # ONLY count if it instantiates another user-defined class
             elif isinstance(func, ast.Name):
-                self.called_methods[self.current_class].add(func.id)
+                if func.id in self.all_classes:
+                    self.called_methods[self.current_class].add(func.id)
                 
         self.generic_visit(node)
     
@@ -248,7 +248,8 @@ for source_class in analyzer.all_classes:
         print(f"Class '{source_class}' CBO = 0")
 
 print("--------------------------------------")
-calculator = RFCCalculator()
+# Pass all_classes collected from your coupling analyzer:
+calculator = RFCCalculator(all_classes=analyzer.all_classes)
 calculator.visit(tree)
 
 print("Response for Class (RFC) Analysis:")
